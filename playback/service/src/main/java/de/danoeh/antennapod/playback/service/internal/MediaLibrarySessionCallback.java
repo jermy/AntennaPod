@@ -68,6 +68,8 @@ public class MediaLibrarySessionCallback implements MediaLibraryService.MediaLib
             = new SessionCommand("playback_speed", Bundle.EMPTY);
     protected static final SessionCommand SESSION_COMMAND_NEXT_CHAPTER
             = new SessionCommand("next_chapter", Bundle.EMPTY);
+    protected static final SessionCommand SESSION_COMMAND_SKIP_EPISODE
+            = new SessionCommand("skip_episode", Bundle.EMPTY);
     public static final SessionCommand SESSION_COMMAND_SKIP_SILENCE
             = new SessionCommand("skip_silence", Bundle.EMPTY);
     public static final SessionCommand SESSION_COMMAND_SET_SLEEP_TIMER
@@ -116,6 +118,7 @@ public class MediaLibrarySessionCallback implements MediaLibraryService.MediaLib
                 .add(SESSION_COMMAND_FAST_FORWARD)
                 .add(SESSION_COMMAND_PLAYBACK_SPEED)
                 .add(SESSION_COMMAND_NEXT_CHAPTER)
+                .add(SESSION_COMMAND_SKIP_EPISODE)
                 .add(SESSION_COMMAND_SKIP_SILENCE)
                 .add(SESSION_COMMAND_SET_SLEEP_TIMER)
                 .add(SESSION_COMMAND_DISABLE_SLEEP_TIMER)
@@ -124,7 +127,6 @@ public class MediaLibrarySessionCallback implements MediaLibraryService.MediaLib
         Player.Commands playerCommands = new Player.Commands.Builder()
                 .addAllCommands()
                 .remove(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
-                .remove(Player.COMMAND_SEEK_TO_PREVIOUS)
                 .build();
         return new MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                 .setAvailableSessionCommands(sessionCommands)
@@ -177,7 +179,7 @@ public class MediaLibrarySessionCallback implements MediaLibraryService.MediaLib
         if (UserPreferences.showSkipOnFullNotification()) {
             buttons.add(new CommandButton.Builder(CommandButton.ICON_NEXT)
                     .setSlots(CommandButton.SLOT_OVERFLOW)
-                    .setPlayerCommand(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+                    .setSessionCommand(SESSION_COMMAND_SKIP_EPISODE)
                     .setDisplayName(context.getString(R.string.skip_episode_label))
                     .build());
         }
@@ -214,18 +216,15 @@ public class MediaLibrarySessionCallback implements MediaLibraryService.MediaLib
             } else if (keyCode == KeyEvent.KEYCODE_MEDIA_REWIND) {
                 session.getPlayer().seekBack();
                 return true;
-            } else if (fromWidget && keyCode == KeyEvent.KEYCODE_MEDIA_NEXT) {
-                session.getPlayer().seekToNextMediaItem();
-                return true;
             } else if (!fromWidget && keyCode == KeyEvent.KEYCODE_MEDIA_NEXT) {
-                // Media3 translates HEADSETHOOK double-tap to MEDIA_NEXT.
-                // Instead of skipping to the next episode, do a fast-forward.
-                session.getPlayer().seekForward();
+                // Bluetooth passthrough and HEADSETHOOK double-tap arrive as MEDIA_NEXT.
+                // Apply the "Reassign hardware buttons" preference via the player command.
+                session.getPlayer().seekToNext();
                 return true;
             } else if (!fromWidget && keyCode == KeyEvent.KEYCODE_MEDIA_PREVIOUS) {
-                // Media3 translates HEADSETHOOK triple-tap to MEDIA_PREVIOUS.
-                // Instead of going to the previous episode, do a rewind.
-                session.getPlayer().seekBack();
+                // Bluetooth passthrough and HEADSETHOOK triple-tap arrive as MEDIA_PREVIOUS.
+                // Apply the "Reassign hardware buttons" preference via the player command.
+                session.getPlayer().seekToPrevious();
                 return true;
             }
         }

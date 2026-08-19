@@ -4,6 +4,7 @@ import android.content.Intent;
 import android.media.audiofx.LoudnessEnhancer;
 import android.os.Bundle;
 import android.util.Log;
+import android.view.KeyEvent;
 import android.webkit.URLUtil;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -61,6 +62,7 @@ import de.danoeh.antennapod.storage.preferences.SleepTimerPreferences;
 import de.danoeh.antennapod.storage.preferences.SleepTimerType;
 import de.danoeh.antennapod.storage.preferences.UserPreferences;
 import de.danoeh.antennapod.ui.appstartintent.MainActivityStarter;
+import de.danoeh.antennapod.ui.appstartintent.MediaButtonStarter;
 import de.danoeh.antennapod.ui.chapters.ChapterUtils;
 import de.danoeh.antennapod.ui.episodes.PlaybackSpeedUtils;
 import de.danoeh.antennapod.ui.notifications.NotificationUtils;
@@ -122,10 +124,17 @@ public class Media3PlaybackService extends MediaLibraryService {
             @Override
             @NonNull
             public Player.Commands getAvailableCommands() {
+                // Expose next/previous transport commands so external controllers (lock screen,
+                // Bluetooth watch, LE Audio) can drive playback. seekToNext()/seekToNextMediaItem()
+                // and seekToPrevious() are overridden to apply the "Reassign hardware buttons"
+                // preference. COMMAND_SEEK_TO_NEXT_MEDIA_ITEM is required because a single-item
+                // timeline leaves COMMAND_SEEK_TO_NEXT unavailable, so the platform dispatches
+                // skip-to-next to seekToNextMediaItem() instead.
                 return super.getAvailableCommands()
                         .buildUpon()
+                        .add(Player.COMMAND_SEEK_TO_NEXT)
                         .add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
-                        .remove(Player.COMMAND_SEEK_TO_PREVIOUS)
+                        .add(Player.COMMAND_SEEK_TO_PREVIOUS)
                         .remove(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
                         .build();
             }
@@ -177,9 +186,17 @@ public class Media3PlaybackService extends MediaLibraryService {
 
             @Override
             public void seekToNextMediaItem() {
-                if (currentPlayable != null) {
-                    startNextInQueue(currentPlayable, true, false);
-                }
+                performReassignedButton(UserPreferences.getHardwareForwardButton());
+            }
+
+            @Override
+            public void seekToNext() {
+                performReassignedButton(UserPreferences.getHardwareForwardButton());
+            }
+
+            @Override
+            public void seekToPrevious() {
+                performReassignedButton(UserPreferences.getHardwarePreviousButton());
             }
 
             @Override
@@ -230,6 +247,26 @@ public class Media3PlaybackService extends MediaLibraryService {
 
     MediaLibrarySessionCallback sessionCallback = new MediaLibrarySessionCallback(this) {
         @Override
+        @UnstableApi
+        public boolean onMediaButtonEvent(@NonNull MediaSession session,
+                @NonNull MediaSession.ControllerInfo controllerInfo, @NonNull Intent intent) {
+            // The widget skip button always skips the episode, unlike the reassignable
+            // next/previous transport handled by the superclass.
+            KeyEvent keyEvent = intent.getParcelableExtra(Intent.EXTRA_KEY_EVENT);
+            boolean fromWidget = MediaButtonStarter.MEDIA_BUTTON_SOURCE_WIDGET.equals(
+                    intent.getStringExtra(MediaButtonStarter.EXTRA_MEDIA_BUTTON_SOURCE));
+            if (fromWidget && keyEvent != null && keyEvent.getAction() == KeyEvent.ACTION_DOWN
+                    && keyEvent.getRepeatCount() == 0
+                    && keyEvent.getKeyCode() == KeyEvent.KEYCODE_MEDIA_NEXT) {
+                if (currentPlayable != null) {
+                    startNextInQueue(currentPlayable, true, false);
+                }
+                return true;
+            }
+            return super.onMediaButtonEvent(session, controllerInfo, intent);
+        }
+
+        @Override
         @NonNull
         @UnstableApi
         public ListenableFuture<SessionResult> onCustomCommand(@NonNull MediaSession session,
@@ -238,6 +275,11 @@ public class Media3PlaybackService extends MediaLibraryService {
                 @NonNull Bundle args) {
             if (customCommand.customAction.equals(SESSION_COMMAND_PLAYBACK_SPEED.customAction)) {
                 setNextPlaybackSpeed();
+                return Futures.immediateFuture(new SessionResult(SessionResult.RESULT_SUCCESS));
+            } else if (customCommand.customAction.equals(SESSION_COMMAND_SKIP_EPISODE.customAction)) {
+                if (currentPlayable != null) {
+                    startNextInQueue(currentPlayable, true, false);
+                }
                 return Futures.immediateFuture(new SessionResult(SessionResult.RESULT_SUCCESS));
             } else if (customCommand.customAction.equals(SESSION_COMMAND_NEXT_CHAPTER.customAction)) {
                 seekToNextChapter();
@@ -706,6 +748,32 @@ public class Media3PlaybackService extends MediaLibraryService {
 
     private boolean isCasting() {
         return player.getDeviceInfo().playbackType == DeviceInfo.PLAYBACK_TYPE_REMOTE;
+    }
+
+    /**
+     * Applies the "Reassign hardware buttons" preference to a next/previous transport action
+     * coming from an external controller (lock screen, Bluetooth headset, watch) or a headset
+     * multi-tap. The preference stores the action as a media key code.
+     */
+    @UnstableApi
+    private void performReassignedButton(int keyCode) {
+        switch (keyCode) {
+            case KeyEvent.KEYCODE_MEDIA_REWIND:
+                player.seekBack();
+                break;
+            case KeyEvent.KEYCODE_MEDIA_NEXT:
+                if (currentPlayable != null) {
+                    startNextInQueue(currentPlayable, true, false);
+                }
+                break;
+            case KeyEvent.KEYCODE_MEDIA_PREVIOUS:
+                player.seekTo(0);
+                break;
+            case KeyEvent.KEYCODE_MEDIA_FAST_FORWARD:
+            default:
+                player.seekForward();
+                break;
+        }
     }
 
     /**
